@@ -533,6 +533,16 @@ class Application_Model_Scheduler
             $linked = false;
 
             foreach ($scheduleItems as $schedule) {
+                /* We need to store the previous track's clip length
+                 * for calculating what the next track's crossfade should
+                 * be. If the previous clip length is less than default
+                 * crossfade, we will set the crossfade to the previous
+                 * clip length less 1 second.
+                 */
+                $previousClipLength = Application_Common_Database::prepareAndExecute(
+                    "SELECT clip_length from cc_schedule where id = {$schedule["id"]}",
+                    array(), Application_Common_Database::COLUMN);
+
                 $id = intval($schedule["id"]);
 
                 /* Find out if the show where the cursor position (where an item will
@@ -647,8 +657,16 @@ class Application_Model_Scheduler
                         $pstart = microtime(true);
 
                         if ($applyCrossfades) {
-                            $initalStartDT = clone $this->findTimeDifference(
-                                $nextStartDT, $this->crossfadeDuration);
+                            $clipLengthSec = Application_Common_DateHelper::playlistTimeToSeconds(
+                                $previousClipLength);
+
+                            if ($clipLengthSec < $this->crossfadeDuration) {
+                                $initalStartDT = clone $this->findTimeDifference(
+                                    $nextStartDT, 1);
+                            } else {
+                                $initalStartDT = clone $this->findTimeDifference(
+                                    $nextStartDT, $this->crossfadeDuration);
+                            }
                         } else {
                             $initalStartDT = clone $nextStartDT;
                         }
@@ -731,10 +749,25 @@ class Application_Model_Scheduler
                         }
 
                         if ($applyCrossfades) {
-                            $nextStartDT = $this->findTimeDifference($nextStartDT,
-                                $this->crossfadeDuration);
+                            $clipLengthSec = Application_Common_DateHelper::playlistTimeToSeconds(
+                                $previousClipLength);
+
+                            if ($clipLengthSec < $this->crossfadeDuration) {
+                                $nextStartDT = $this->findTimeDifference($nextStartDT,
+                                    1);
+                            } else {
+                                $nextStartDT = $this->findTimeDifference($nextStartDT,
+                                    $this->crossfadeDuration);
+                            }
+
                             $endTimeDT = $this->findEndTime($nextStartDT, $file['cliplength']);
-                            $endTimeDT = $this->findTimeDifference($endTimeDT, $this->crossfadeDuration);
+                            if ($clipLengthSec < $this->crossfadeDuration) {
+                                $endTimeDT = $this->findTimeDifference($endTimeDT,
+                                    1);
+                            } else {
+                                $endTimeDT = $this->findTimeDifference($endTimeDT,
+                                    $this->crossfadeDuration);
+                            }
                             /* Set it to false because the rest of the crossfades
                              * will be applied after we insert each item
                              */
@@ -775,6 +808,8 @@ class Application_Model_Scheduler
                         $nextStartDT = $this->findTimeDifference($endTimeDT, $this->crossfadeDuration);
                         $pos++;
 
+                        $previousClipLength = $file["cliplength"];
+
                     }//all files have been inserted/moved
                     if ($doInsert) {
                         $insert_sql = "INSERT INTO cc_schedule ".
@@ -809,7 +844,6 @@ class Application_Model_Scheduler
                     }
 
                     if ($adjustSched === true) {
-
                         $followingItems_sql = "SELECT * FROM cc_schedule ".
                             "WHERE starts >= '{$initalStartDT->format("Y-m-d H:i:s.u")}' ".
                             "AND instance_id = {$instanceId} ";
@@ -824,8 +858,18 @@ class Application_Model_Scheduler
 
                         //recalculate the start/end times after the inserted items.
                         foreach ($followingSchedItems as $item) {
+                            Logging::info($item);
+                            $clipLengthSec = Application_Common_DateHelper::playlistTimeToSeconds(
+                                $previousClipLength);
+
                             $endTimeDT = $this->findEndTime($nextStartDT, $item["clip_length"]);
-                            $endTimeDT = $this->findTimeDifference($endTimeDT, $this->crossfadeDuration);
+                            if ($clipLengthSec < $this->crossfadeDuration) {
+                                $endTimeDT = $this->findTimeDifference($endTimeDT, 1);
+                            } else {
+                                $endTimeDT = $this->findTimeDifference($endTimeDT, 
+                                    $this->crossfadeDuration);
+                            }
+
                             $update_sql = "UPDATE cc_schedule SET ".
                                 "starts = '{$nextStartDT->format("Y-m-d H:i:s")}', ".
                                 "ends = '{$endTimeDT->format("Y-m-d H:i:s")}', ".
@@ -834,7 +878,13 @@ class Application_Model_Scheduler
                             Application_Common_Database::prepareAndExecute(
                                 $update_sql, array(), Application_Common_Database::EXECUTE);
 
-                            $nextStartDT = $this->findTimeDifference($endTimeDT, $this->crossfadeDuration);
+                            if ($clipLengthSec < $this->crossfadeDuration) {
+                                $nextStartDT = $this->findTimeDifference($endTimeDT, 1);
+                            } else {
+                                $nextStartDT = $this->findTimeDifference($endTimeDT,
+                                    $this->crossfadeDuration);
+                            }
+
                             $pos++;
                         }
 
