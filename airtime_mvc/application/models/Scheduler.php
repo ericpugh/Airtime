@@ -449,6 +449,8 @@ class Application_Model_Scheduler
             "WHERE instance_id = {$instanceId} ".
             "ORDER BY starts";
         $schedule = Application_Common_Database::prepareAndExecute($schedule_sql);
+Logging::info($schedule);
+Logging::info("-------------");
 
         foreach ($schedule as $item) {
             $itemEndDT = $this->findEndTime($itemStartDT, $item["clip_length"]);
@@ -462,6 +464,8 @@ class Application_Model_Scheduler
 
             $itemStartDT = $this->findTimeDifference($itemEndDT, $this->crossfadeDuration);
         }
+
+        Logging::info(Application_Common_Database::prepareAndExecute($schedule_sql));
     }
 
     /*
@@ -672,8 +676,8 @@ class Application_Model_Scheduler
                         }
 
                         $pend = microtime(true);
-                        Logging::debug("finding all following items.");
-                        Logging::debug(floatval($pend) - floatval($pstart));
+                        //Logging::debug("finding all following items.");
+                        //Logging::debug(floatval($pend) - floatval($pstart));
                     }
 
                     if (is_null($filesToInsert)) {
@@ -805,10 +809,18 @@ class Application_Model_Scheduler
                                 $update_sql, array(), Application_Common_Database::EXECUTE);
                         }
 
-                        $nextStartDT = $this->findTimeDifference($endTimeDT, $this->crossfadeDuration);
-                        $pos++;
-
                         $previousClipLength = $file["cliplength"];
+                        $clipLengthSec = Application_Common_DateHelper::playlistTimeToSeconds(
+                                $previousClipLength);
+
+                        if ($clipLengthSec < $this->crossfadeDuration) {
+                            $nextStartDT = $this->findTimeDifference($endTimeDT, 1);
+                        } else {
+                            $nextStartDT = $this->findTimeDifference($endTimeDT,
+                                $this->crossfadeDuration);
+                        }
+
+                        $pos++;
 
                     }//all files have been inserted/moved
                     if ($doInsert) {
@@ -858,7 +870,8 @@ class Application_Model_Scheduler
 
                         //recalculate the start/end times after the inserted items.
                         foreach ($followingSchedItems as $item) {
-                            Logging::info($item);
+                            $previousClipLength = $item["clip_length"];
+
                             $clipLengthSec = Application_Common_DateHelper::playlistTimeToSeconds(
                                 $previousClipLength);
 
@@ -886,21 +899,22 @@ class Application_Model_Scheduler
                             }
 
                             $pos++;
+                            //$previousClipLength = $item["clip_length"];
                         }
 
                         $pend = microtime(true);
-                        Logging::debug("adjusting all following items.");
-                        Logging::debug(floatval($pend) - floatval($pstart));
+                        //Logging::debug("adjusting all following items.");
+                        //Logging::debug(floatval($pend) - floatval($pstart));
                     }
                     if ($moveAction) {
-                        $this->calculateCrossfades($instanceId);
+                        //$this->calculateCrossfades($instanceId);
                     }
                 }//for each instance
             }//for each schedule location
 
             $endProfile = microtime(true);
-            Logging::debug("finished adding scheduled items.");
-            Logging::debug(floatval($endProfile) - floatval($startProfile));
+            //Logging::debug("finished adding scheduled items.");
+            //Logging::debug(floatval($endProfile) - floatval($startProfile));
 
             //update the status flag in cc_schedule.
             $instances = CcShowInstancesQuery::create()
@@ -914,8 +928,8 @@ class Application_Model_Scheduler
             }
 
             $endProfile = microtime(true);
-            Logging::debug("updating show instances status.");
-            Logging::debug(floatval($endProfile) - floatval($startProfile));
+            //Logging::debug("updating show instances status.");
+            //Logging::debug(floatval($endProfile) - floatval($startProfile));
 
             $startProfile = microtime(true);
 
@@ -925,8 +939,8 @@ class Application_Model_Scheduler
                 ->update(array('DbLastScheduled' => new DateTime("now", new DateTimeZone("UTC"))), $this->con);
 
             $endProfile = microtime(true);
-            Logging::debug("updating last scheduled timestamp.");
-            Logging::debug(floatval($endProfile) - floatval($startProfile));
+            //Logging::debug("updating last scheduled timestamp.");
+            //Logging::debug(floatval($endProfile) - floatval($startProfile));
         } catch (Exception $e) {
             Logging::debug($e->getMessage());
             throw $e;
