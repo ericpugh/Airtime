@@ -345,6 +345,10 @@ class Application_Service_ShowService
         CcShowDaysQuery::create()->filterByDbShowId($this->ccShow->getDbId())->delete();
     }
 
+    /**
+     * 
+     * Deletes rebroadcast instances belonging to an entire cc_show
+     */
     private function deleteRebroadcastInstances()
     {
         $sql = <<<SQL
@@ -356,6 +360,21 @@ SQL;
         Application_Common_Database::prepareAndExecute( $sql, array(
             ':showId' => $this->ccShow->getDbId(),
             ':timestamp'  => gmdate("Y-m-d H:i:s")), 'execute');
+    }
+
+    /**
+     * 
+     * Deletes the rebroadcast show belonging to a single cc_show_instance
+     */
+    private function deleteInstanceRebroadcast($instanceId)
+    {
+        $sql = <<<SQL
+DELETE FROM cc_show_instances
+WHERE id = :instanceId
+AND rebroadcast = 1;
+SQL;
+        Application_Common_Database::prepareAndExecute( $sql, array(
+            ':instanceId' => $instanceId), 'execute');
     }
 
     /**
@@ -603,6 +622,91 @@ SQL;
 
     }
 
+    public function delegateShowInstanceDeletion($instanceId)
+    {
+        $service_user = new Application_Service_UserService();
+        $currentUser = $service_user->getCurrentUser();
+
+        $con = Propel::getConnection();
+        $con->beginTransaction();
+        try {
+            if (!$currentUser->isAdminOrPM()) {
+                throw new Exception("Permission denied");
+            }
+
+            $ccShowInstance = CcShowInstancesQuery::create()
+                ->findPk($instanceId);
+            if (!$ccShowInstance) {
+                throw new Exception("Could not find show instance");
+            }
+
+            if (gmdate("Y-m-d H:i:s") <= $ccShowInstance->getDbEnds()) {
+                $ccShowInstance
+                    ->setDbModifiedInstance(true)
+                    ->save();
+
+                //delete the rebroadcasts of the removed recorded show
+                if ($ccShowInstance->isRecorded()) {
+                    $this->deleteInstanceRebroadcast($instanceId);
+                }
+
+                //delete all files scheduled in cc_schedule table
+                $this->deleteInstanceSchedule($instanceId);
+
+                //check if we need to delete the cc_show
+                //we need to do this if the user is deleting the last instance
+                $this->getInstanceCount($instanceId);
+            }
+
+            $con->commit();
+            return $showId;
+        } catch (Exception $e) {
+            $con->rollback();
+            Logging::info("Delete show instance failed");
+            Logging::info($e->getMessage());
+            return false;
+        }
+    }
+
+    private function getInstanceCount($instanceId)
+    {
+        //$showId = $this->ccShow->get
+    }
+
+    /**
+     * 
+     * Removes tracks from the schedule that belong to a deleted
+     * show instance (cc_show_instance)
+     */
+    private function deleteInstanceSchedule($instanceId)
+    {
+        CcScheduleQuery::create()
+            ->filterByDbInstanceId($instanceId)
+            ->delete();
+    }
+
+    /**
+     * 
+     * Deletes tracks from the schedule that belong to a deleted
+     * show (cc_show)
+     */
+    private function deleteShowSchedule($showId)
+    {
+        //find all instance ids belonging to the cc_show
+        $criteria = new Criteria();
+        $criteria->clearSelectColumns();
+        $criteria->addSelectColumn(CcShowInstancesPeer::ID);
+        $instanceIds = array();
+        $ids = CcShowInstancesPeer::doSelectStmt($criteria);
+        while ($id = $ids->fetch()) {
+            array_push($instanceIds, $id["id"]);
+        }
+
+        CcScheduleQuery::create()
+            ->filterByDbInstanceId($instanceIds, Criteria::IN)
+            ->delete();
+    }
+
     public function deleteShow($instanceId, $singleInstance=false)
     {
         $service_user = new Application_Service_UserService();
@@ -622,12 +726,15 @@ SQL;
             }
 
             $showId = $ccShowInstance->getDbShowId();
+
             if ($singleInstance) {
                 $ccShowInstances = CcShowInstancesQuery::create()
                     ->filterByDbShowId($showId)
                     ->filterByDbStarts($ccShowInstance->getDbStarts(), Criteria::GREATER_EQUAL)
                     ->filterByDbEnds($ccShowInstance->getDbEnds(), Criteria::LESS_EQUAL)
                     ->find();
+                $ccShowInstances = CcShowInstancesQuery::create()
+                    ->findPk($instanceId);
             } else {
                 $ccShowInstances = CcShowInstancesQuery::create()
                     ->filterByDbShowId($showId)
@@ -636,7 +743,7 @@ SQL;
             }
 
             if (gmdate("Y-m-d H:i:s") <= $ccShowInstance->getDbEnds()) {
-                $this->deleteShowInstances($ccShowInstances, $ccShowInstance->getDbShowId());
+                $this->deleteShowInstances($ccShowInstances, $showId);
             }
 
             Application_Model_StoredFile::updatePastFilesIsScheduled();
